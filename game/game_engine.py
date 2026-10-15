@@ -1,4 +1,6 @@
 
+import math
+import struct
 import pygame
 from .player import Player
 from .obstacle import Obstacle
@@ -16,6 +18,26 @@ DIFFICULTIES = {
     "3": ("Hard", 9, 18, 50)
 }
 
+def create_tone(start_frequency, end_frequency, duration, volume=0.3):
+    sample_rate = 22050
+    samples = int(sample_rate * duration)
+    audio = bytearray()
+    phase = 0.0
+
+    for i in range(samples):
+        progress = i / samples
+        frequency = start_frequency + (
+            end_frequency - start_frequency
+        ) * progress
+        phase += 2 * math.pi * frequency / sample_rate
+        envelope = (1 - progress) ** 2
+        value = int(
+            32767 * volume * envelope * math.sin(phase)
+        )
+        audio.extend(struct.pack("<h", value))
+
+    return pygame.mixer.Sound(buffer=bytes(audio))
+
 class GameEngine:
     def __init__(self, width, height):
         self.width = width
@@ -26,7 +48,30 @@ class GameEngine:
         self.difficulty_font = pygame.font.SysFont("Arial", 24)
         self.difficulty = "Medium"
         self.game_over = False
+
+        self.jump_sound = None
+        self.score_sound = None
+        self.game_over_sound = None
+
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(
+                    frequency=22050,
+                    size=-16,
+                    channels=1
+                )
+
+            self.jump_sound = create_tone(700, 1100, 0.12)
+            self.score_sound = create_tone(900, 1400, 0.16)
+            self.game_over_sound = create_tone(500, 120, 0.45, 0.4)
+        except pygame.error:
+            pass
+
         self.reset_game(self.difficulty)
+
+    def play_sound(self, sound):
+        if sound is not None:
+            sound.play()
 
     def reset_game(self, difficulty):
         self.difficulty = difficulty
@@ -34,6 +79,7 @@ class GameEngine:
             values for values in DIFFICULTIES.values()
             if values[0] == difficulty
         )
+
         self.speed = settings[1]
         self.max_speed = settings[2]
         self.spawn_interval = settings[3]
@@ -61,7 +107,9 @@ class GameEngine:
             return
 
         if event.key in (pygame.K_SPACE, pygame.K_UP, pygame.K_w):
-            self.player.jump()
+            if self.player.on_ground:
+                self.player.jump()
+                self.play_sound(self.jump_sound)
 
     def handle_input(self):
         pass
@@ -101,12 +149,17 @@ class GameEngine:
 
             if swept_rect.colliderect(player_rect):
                 self.game_over = True
+                self.play_sound(self.game_over_sound)
                 return
 
         for obstacle in self.obstacles:
-            if not obstacle.scored and obstacle.x + obstacle.width < self.player.x:
+            if (
+                not obstacle.scored
+                and obstacle.x + obstacle.width < self.player.x
+            ):
                 obstacle.scored = True
                 self.score += 1
+                self.play_sound(self.score_sound)
 
         self.obstacles = [
             obstacle for obstacle in self.obstacles
@@ -117,9 +170,11 @@ class GameEngine:
 
     def render(self, screen):
         pygame.draw.line(
-            screen, BROWN,
+            screen,
+            BROWN,
             (0, self.ground_y),
-            (self.width, self.ground_y), 4
+            (self.width, self.ground_y),
+            4
         )
 
         pygame.draw.rect(screen, WHITE, self.player.rect())
@@ -146,6 +201,7 @@ class GameEngine:
             difficulty_text = self.font.render(
                 f"Difficulty: {self.difficulty}", True, BLACK
             )
+
             instructions = [
                 "Choose a difficulty to play again:",
                 "1 - Easy",
@@ -174,7 +230,11 @@ class GameEngine:
             )
 
             for i, line in enumerate(instructions):
-                text = self.difficulty_font.render(line, True, GRAY if i == 0 else BLACK)
+                text = self.difficulty_font.render(
+                    line,
+                    True,
+                    GRAY if i == 0 else BLACK
+                )
                 screen.blit(
                     text,
                     text.get_rect(
